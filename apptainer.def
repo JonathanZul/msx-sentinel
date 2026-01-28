@@ -1,0 +1,44 @@
+Bootstrap: docker
+From: python:3.11-slim
+
+%labels
+    Author MSX-Sentinel
+    Description Tier 1 container for WSI tiling on Alliance HPC (Siku)
+
+%post
+    # System dependencies for image processing
+    apt-get update && apt-get install -y --no-install-recommends \
+        libgl1-mesa-glx \
+        libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+    # Python dependencies
+    pip install --no-cache-dir \
+        numpy>=1.24.0 \
+        pillow>=10.0.0 \
+        tifffile>=2023.7.0 \
+        pyyaml>=6.0 \
+        python-dotenv>=1.0.0 \
+        beartype>=0.15.0 \
+        sqlite-utils>=3.35 \
+        rich>=13.0.0
+
+%environment
+    export PYTHONPATH=/app
+    export LC_ALL=C
+
+%runscript
+    exec python "$@"
+
+%help
+    MSX-Sentinel Apptainer image for Alliance HPC clusters.
+
+    Build:
+        apptainer build msx_sentinel.sif apptainer.def
+
+    Run tiling job:
+        apptainer exec --bind /scratch:/scratch msx_sentinel.sif \
+            python -m src.hpc.tiling <args>
+
+    Interactive shell:
+        apptainer shell --bind /project:/project msx_sentinel.sif

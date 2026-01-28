@@ -1,0 +1,18 @@
+# MSX-Sentinel Dependencies
+# Install: pip install -r requirements.txt
+
+# Core scientific
+numpy>=1.24.0
+pillow>=10.0.0
+tifffile>=2023.7.0
+
+# Configuration & validation
+pyyaml>=6.0
+python-dotenv>=1.0.0
+beartype>=0.15.0
+
+# Database
+sqlite-utils>=3.35
+
+# CLI & progress
+rich>=13.0.0

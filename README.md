@@ -36,23 +36,48 @@ All coordinates normalize to Level 0 (40x) resolution:
 
 ## Requirements
 
-- Python 3.10+
-- For HPC: Apptainer/Singularity, CUDA 11.8+
+- Python 3.11+
+- For HPC: Apptainer, CUDA 11.8+
 - For local: Ollama or API keys (Anthropic/OpenAI/Gemini)
 
 ## Setup
 
+### Local (macOS)
+
 ```bash
-# Clone repository
 git clone <repo-url>
 cd msx-sentinel
 
-# Create conda environment
-conda env create -f environment.yml
-conda activate msx-sentinel
+# Create virtual environment
+python -m venv .venv
+source .venv/bin/activate
 
-# Copy and configure environment
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure environment
 cp .env.example .env
+```
+
+### HPC (Alliance/Siku)
+
+```bash
+# Build Apptainer image (once, on login node)
+apptainer build msx_sentinel.sif apptainer.def
+
+# Run tiling job
+apptainer exec --bind /scratch:/scratch,/project:/project msx_sentinel.sif \
+    python -m src.hpc.tiling --wsi /path/to/slide.ome.tiff
+
+# Interactive shell
+apptainer shell --bind /scratch:/scratch msx_sentinel.sif
+```
+
+### Docker (Optional)
+
+```bash
+docker build -t msx-sentinel .
+docker run -v $(pwd)/data:/app/data msx-sentinel
 ```
 
 ## Configuration
