@@ -1,0 +1,187 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Translations
+*.mo
+*.pot
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.conda/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# =======================
+# AI Coding Tools
+# =======================
+# Claude Code
+.claude/
+
+# Cursor
+.cursor/
+.cursorignore
+.cursorrc
+
+# Windsurf
+.windsurf/
+
+# Cline
+.cline/
+
+# Aider
+.aider*
+
+# Continue
+.continue/
+
+# Copilot
+.github/copilot/
+
+# =======================
+# Project-Specific
+# =======================
+# Large data files (WSIs, tiles)
+*.ome.tiff
+*.ome.tif
+*.svs
+*.ndpi
+*.mrxs
+*.vsi
+*.scn
+*.bif
+
+# DVC (if used for data versioning)
+/dvc.lock
+*.dvc
+
+# Model weights (track via DVC or external storage)
+*.pt
+*.pth
+*.onnx
+*.weights
+!models/.gitkeep
+
+# SQLite databases (manifests - track structure, not data)
+*.db
+*.sqlite
+*.sqlite3
+
+# Debug artifacts (thesis figures generated at runtime)
+data/debug/
+
+# Logs
+logs/
+*.log
+
+# Scratch/temp files
+scratch/
+tmp/
+temp/
+
+# HPC job outputs
+slurm-*.out
+*.o[0-9]*
+*.e[0-9]*
+
+# Secrets and credentials
+.env.local
+.env.*.local
+secrets/
+credentials/
+*.pem
+*.key
+
+# Config overrides (local machine specifics)
+config.local.yaml
