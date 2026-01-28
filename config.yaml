@@ -1,0 +1,40 @@
+# MSX-Sentinel Configuration
+# Environment auto-detected (LOCAL on Darwin, HPC if SLURM_JOB_ID present)
+
+# ------------------------------------------------------------------------------
+# Provider Settings
+# ------------------------------------------------------------------------------
+active_provider: ollama
+
+ollama:
+  host: "http://localhost:11434"
+  vlm_model: "llava:13b"
+  llm_model: "llama3:8b"
+
+# ------------------------------------------------------------------------------
+# YOLO Scout Configuration
+# ------------------------------------------------------------------------------
+yolo:
+  # Path to YOLO training dataset (images/train, labels/train, etc.)
+  dataset_path: "/Volumes/One Touch/MSX Project/data/processed/yolo_dataset"
+
+  # Enable Weights & Biases tracking (requires wandb login)
+  use_wandb: true
+
+# ------------------------------------------------------------------------------
+# Debug & Thesis Artifacts
+# ------------------------------------------------------------------------------
+debug:
+  enabled: true
+  dpi: 300
+
+# ------------------------------------------------------------------------------
+# Path Overrides (optional - uncomment to override defaults)
+# ------------------------------------------------------------------------------
+# paths:
+#   raw_wsi: "/Volumes/One Touch/MSX Project/data/exports/wsis"
+#   masks: "/Volumes/One Touch/MSX Project/data/interim/oyster_masks"
+#   processed: "/Volumes/One Touch/MSX Project/data/processed"
+#   manifest: "data/manifests"
+#   models: "models"
+#   debug: "data/debug"

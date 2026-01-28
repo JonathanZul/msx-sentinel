@@ -16,3 +16,8 @@ sqlite-utils>=3.35
 
 # CLI & progress
 rich>=13.0.0
+
+# ML
+ultralytics>=8.0.0
+opencv-python>=4.8.0
+wandb>=0.15.0
