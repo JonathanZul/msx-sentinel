@@ -6,7 +6,7 @@ import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from .config import Config, Provider
+from .config import Config, ModelParams, Provider
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +48,10 @@ class LLMProvider(ABC):
 class OllamaVLM(VLMProvider):
     """Ollama-based vision-language model provider."""
 
-    def __init__(self, host: str, model: str) -> None:
+    def __init__(self, host: str, model: str, params: ModelParams) -> None:
         self._host = host
         self._model = model
+        self._params = params
 
     def analyze_patch(self, image_path: Path, prompt: str) -> str:
         """Analyze patch using Ollama VLM.
@@ -64,9 +65,10 @@ class OllamaVLM(VLMProvider):
 class OllamaLLM(LLMProvider):
     """Ollama-based large language model provider."""
 
-    def __init__(self, host: str, model: str) -> None:
+    def __init__(self, host: str, model: str, params: ModelParams) -> None:
         self._host = host
         self._model = model
+        self._params = params
 
     def generate_diagnosis(self, context: str, findings: list[str]) -> str:
         """Generate diagnosis using Ollama LLM.
@@ -89,7 +91,11 @@ def get_vlm() -> VLMProvider:
     config = Config.get()
 
     if config.active_provider == Provider.OLLAMA:
-        return OllamaVLM(host=config.ollama_host, model=config.ollama_vlm_model)
+        return OllamaVLM(
+            host=config.ollama_host,
+            model=config.ollama_vlm_model,
+            params=config.model_params,
+        )
 
     raise NotImplementedError(f"VLM provider not implemented: {config.active_provider.value}")
 
@@ -106,6 +112,10 @@ def get_llm() -> LLMProvider:
     config = Config.get()
 
     if config.active_provider == Provider.OLLAMA:
-        return OllamaLLM(host=config.ollama_host, model=config.ollama_llm_model)
+        return OllamaLLM(
+            host=config.ollama_host,
+            model=config.ollama_llm_model,
+            params=config.model_params,
+        )
 
     raise NotImplementedError(f"LLM provider not implemented: {config.active_provider.value}")

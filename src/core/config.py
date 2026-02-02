@@ -27,6 +27,20 @@ class Provider(Enum):
 
 
 @dataclass(frozen=True)
+class ModelParams:
+    """Inference parameters for deterministic VLM/LLM output.
+
+    Args:
+        temperature: Sampling temperature. 0.0 for deterministic output.
+        top_p: Nucleus sampling threshold.
+        max_tokens: Maximum tokens in model response.
+    """
+    temperature: float = 0.0
+    top_p: float = 1.0
+    max_tokens: int = 512
+
+
+@dataclass(frozen=True)
 class ScaleConfig:
     """Configuration for a single magnification scale.
 
@@ -71,6 +85,9 @@ class Config:
     ollama_host: str = "http://localhost:11434"
     ollama_vlm_model: str = "llava:13b"
     ollama_llm_model: str = "llama3:8b"
+
+    # Model inference parameters (deterministic by default)
+    model_params: ModelParams = field(default_factory=ModelParams)
 
     # Debug/thesis artifact settings
     debug_dpi: int = 300
@@ -130,6 +147,13 @@ class Config:
         if debug := data.get("debug"):
             self.debug_dpi = debug.get("dpi", self.debug_dpi)
             self.debug_enabled = debug.get("enabled", self.debug_enabled)
+
+        if model := data.get("model_params"):
+            self.model_params = ModelParams(
+                temperature=model.get("temperature", 0.0),
+                top_p=model.get("top_p", 1.0),
+                max_tokens=model.get("max_tokens", 512),
+            )
 
     @classmethod
     def reset(cls) -> None:
