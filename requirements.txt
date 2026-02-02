@@ -21,3 +21,9 @@ rich>=13.0.0
 ultralytics>=8.0.0
 opencv-python>=4.8.0
 wandb>=0.15.0
+
+# HTTP Client
+httpx>=0.25.0
+
+# Testing
+pytest>=7.0.0
