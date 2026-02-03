@@ -336,11 +336,22 @@ class DiagnosticBrain:
             text = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
             text = text.strip()
 
+        # Try direct JSON parse first
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
-            logger.warning(f"Failed to parse LLM response as JSON: {text[:100]}...")
-            return self._default_result(None)
+            # LLM may have added prose around the JSON - try to extract it
+            import re
+            json_match = re.search(r"\{[\s\S]*\}", text)
+            if json_match:
+                try:
+                    data = json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to parse extracted JSON: {text[:100]}...")
+                    return self._default_result(None)
+            else:
+                logger.warning(f"No JSON found in LLM response: {text[:100]}...")
+                return self._default_result(None)
 
         # Validate and normalize
         result = {
