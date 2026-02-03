@@ -9,9 +9,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from src.bridge.manifest import ManifestManager, TileRecord
 from src.core.config import Config
@@ -438,18 +439,20 @@ class DiagnosticBrain:
             )
             table.add_row("Organ Distribution", organs)
 
-        # Build panel content
-        content = f"""[bold {color}]SEVERITY: {report.final_severity_score} ({label})[/]
-[dim]Confidence: {report.confidence_score:.0%}[/]
-
-[bold]Evidence Summary[/]
-{table}
-
-[bold]Justification[/]
-{report.justification}
-
-[bold]Next Steps[/]
-{report.suggested_next_steps}"""
+        # Build panel content using Group to combine renderables
+        content = Group(
+            Text.from_markup(f"[bold {color}]SEVERITY: {report.final_severity_score} ({label})[/]"),
+            Text.from_markup(f"[dim]Confidence: {report.confidence_score:.0%}[/]"),
+            Text(""),
+            Text.from_markup("[bold]Evidence Summary[/]"),
+            table,
+            Text(""),
+            Text.from_markup("[bold]Justification[/]"),
+            Text(report.justification),
+            Text(""),
+            Text.from_markup("[bold]Next Steps[/]"),
+            Text(report.suggested_next_steps),
+        )
 
         panel = Panel(
             content,
