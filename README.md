@@ -32,8 +32,10 @@ python scripts/run_pipeline.py <wsi_path> <mask_path> [options]
 
 | Argument | Description |
 |----------|-------------|
-| `wsi_path` | Path to OME-TIFF whole slide image |
-| `mask_path` | Path to tissue mask PNG (grayscale, non-zero = tissue) |
+| `wsi_path` | Path to OME-TIFF whole slide image (required for standalone/hpc modes) |
+| `mask_path` | Path to tissue mask PNG (required for standalone/hpc modes) |
+| `--mode` | Execution mode: `standalone` (default), `hpc`, or `local` |
+| `--package` | Path to bridge package directory (required for `--mode local`) |
 | `--client-id` | Multi-tenant identifier (default: "default") |
 | `--output` | JSON report output path |
 | `--skip-tiling` | Skip tile extraction (use existing) |
@@ -45,8 +47,14 @@ python scripts/run_pipeline.py <wsi_path> <mask_path> [options]
 ### Examples
 
 ```bash
-# Full pipeline
+# Standalone: Full pipeline locally (default)
 python scripts/run_pipeline.py slide.ome.tiff mask.png
+
+# HPC mode: Run Phases 1-3, generate bridge package for Globus transfer
+python scripts/run_pipeline.py slide.ome.tiff mask.png --mode hpc
+
+# Local mode: Run Phases 4-5 from transferred bridge package
+python scripts/run_pipeline.py --mode local --package data/bridge_packages/slide_20240115_120000
 
 # Resume from existing tiles
 python scripts/run_pipeline.py slide.ome.tiff mask.png --skip-tiling
@@ -97,7 +105,7 @@ src/
 | Tier | Environment | Modules |
 |------|-------------|---------|
 | 1 (Heavy) | HPC/Siku | Tiling, YOLO, Hemocyte Density |
-| 2 (Bridge) | Both | Manifest Sync |
+| 2 (Bridge) | Globus | Manifest + Tiles Packaging, Checksum Verification |
 | 3 (Reasoning) | Local/macOS | VLM Eye, LLM Brain |
 
 ## Multi-Scale Coordinate System
@@ -192,6 +200,57 @@ docker build -t msx-sentinel .
 docker run -v $(pwd)/data:/app/data msx-sentinel \
     python scripts/run_pipeline.py /app/data/slide.ome.tiff /app/data/mask.png
 ```
+
+## Data Transfer via Globus
+
+For hybrid workflows where heavy compute runs on HPC and reasoning runs locally, use Globus for reliable, resumable transfers.
+
+### Step 1: Run HPC Job
+
+Submit the Slurm job to run Phases 1-3 (Tiling, YOLO, Biomarkers):
+
+```bash
+# On Siku HPC
+sbatch scripts/siku_job.sh
+
+# Or run directly with --mode hpc
+python scripts/run_pipeline.py slide.ome.tiff mask.png --mode hpc
+```
+
+This generates a bridge package at `data/bridge_packages/{wsi_name}_{timestamp}/` containing:
+- `tiles.db` — SQLite manifest with all tile metadata
+- `processed/{wsi_name}/` — Extracted PNG tiles
+- `metadata.json` — HPC results and pipeline state
+- `checksum.txt` — SHA256 checksums for transfer verification
+
+### Step 2: Transfer via Globus
+
+1. Open [Globus Web App](https://app.globus.org/)
+2. Set **Source Endpoint**: `alliancecan#siku`
+3. Navigate to: `/project/def-agodbout/jezul/msx_sentinel/data/bridge_packages/`
+4. Set **Destination Endpoint**: Your Globus Connect Personal endpoint
+5. Select the package folder and click **Start**
+
+**Verify transfer integrity** (optional):
+```bash
+cd /path/to/bridge_package
+sha256sum -c checksum.txt
+```
+
+### Step 3: Run Local Reasoning
+
+Run Phases 4-5 (VLM Eye, Diagnostic Brain) on the transferred package:
+
+```bash
+# On local machine
+python scripts/run_pipeline.py --mode local --package data/bridge_packages/{wsi_name}_{timestamp}
+```
+
+### Globus Setup
+
+**HPC (Siku):** Globus endpoint pre-configured on Alliance clusters (`alliancecan#siku`).
+
+**Local Machine:** Install [Globus Connect Personal](https://www.globus.org/globus-connect-personal) to create a personal endpoint.
 
 ## Output
 

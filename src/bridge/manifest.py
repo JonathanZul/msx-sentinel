@@ -91,6 +91,11 @@ class ManifestManager:
         self._db_path = db_path or Paths.get().manifest_db
         self._ensure_schema()
 
+    @property
+    def db_path(self) -> Path:
+        """Return the path to the SQLite database."""
+        return self._db_path
+
     def _ensure_schema(self) -> None:
         """Create tables and indices if they don't exist."""
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
