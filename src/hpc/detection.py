@@ -109,7 +109,7 @@ class YOLODetector:
 
         # Resolve model path
         if model_path is None:
-            model_path = self._paths.models_dir / "yolo_msx.pt"
+            model_path = self._paths.models_dir / "yolo_scout" / "best.pt"
 
         if not model_path.exists():
             raise FileNotFoundError(f"YOLO weights not found: {model_path}")
