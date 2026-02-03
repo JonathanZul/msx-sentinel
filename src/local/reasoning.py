@@ -10,6 +10,8 @@ from typing import Any
 
 import cv2
 import numpy as np
+import tifffile
+import zarr
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -242,6 +244,8 @@ class VLMEye:
     def _extract_patch(self, candidate: Candidate, wsi_path: Path) -> np.ndarray | None:
         """Extract 640x640 patch from Level 0 WSI centered on detection.
 
+        Uses tifffile+zarr for memory-efficient region access.
+
         Args:
             candidate: Detection candidate with Level 0 coordinates.
             wsi_path: Path to WSI file.
@@ -250,39 +254,58 @@ class VLMEye:
             BGR image array, or None on failure.
         """
         try:
-            import openslide
-        except ImportError:
-            logger.error("openslide-python not installed")
-            return None
+            with tifffile.TiffFile(wsi_path) as tif:
+                if not tif.pages:
+                    logger.error(f"No pages in WSI: {wsi_path}")
+                    return None
 
-        try:
-            slide = openslide.OpenSlide(str(wsi_path))
+                # Get Level 0 dimensions
+                level0 = tif.pages[0]
+                wsi_width = level0.shape[1]
+                wsi_height = level0.shape[0]
+
+                # Calculate top-left corner for centered patch
+                half_size = self.PATCH_SIZE // 2
+                x = candidate.x_level0 - half_size
+                y = candidate.y_level0 - half_size
+
+                # Clamp to slide bounds
+                x = max(0, min(x, wsi_width - self.PATCH_SIZE))
+                y = max(0, min(y, wsi_height - self.PATCH_SIZE))
+
+                # Use zarr for memory-efficient region access
+                store = tif.aszarr()
+                zarr_array = zarr.open(store, mode="r")
+
+                # Determine if Group (multi-level) or Array (single level)
+                is_group = hasattr(zarr_array, "keys") and callable(zarr_array.keys)
+
+                if is_group:
+                    level0_arr = zarr_array["0"]
+                    region = np.array(level0_arr[y:y + self.PATCH_SIZE, x:x + self.PATCH_SIZE])
+                else:
+                    region = np.array(zarr_array[y:y + self.PATCH_SIZE, x:x + self.PATCH_SIZE])
+
+                store.close()
+
+                # Convert to BGR for OpenCV compatibility
+                if region.ndim == 2:
+                    # Grayscale
+                    patch = cv2.cvtColor(region, cv2.COLOR_GRAY2BGR)
+                elif region.shape[2] == 3:
+                    # RGB -> BGR
+                    patch = cv2.cvtColor(region, cv2.COLOR_RGB2BGR)
+                elif region.shape[2] == 4:
+                    # RGBA -> BGR
+                    patch = cv2.cvtColor(region, cv2.COLOR_RGBA2BGR)
+                else:
+                    patch = region
+
+                return patch
+
         except Exception as e:
-            logger.error(f"Failed to open WSI {wsi_path}: {e}")
+            logger.warning(f"Failed to extract patch at ({candidate.x_level0}, {candidate.y_level0}): {e}")
             return None
-
-        # Calculate top-left corner for centered patch
-        half_size = self.PATCH_SIZE // 2
-        x = candidate.x_level0 - half_size
-        y = candidate.y_level0 - half_size
-
-        # Clamp to slide bounds
-        dims = slide.dimensions
-        x = max(0, min(x, dims[0] - self.PATCH_SIZE))
-        y = max(0, min(y, dims[1] - self.PATCH_SIZE))
-
-        try:
-            # Read from Level 0 (40x)
-            region = slide.read_region((x, y), 0, (self.PATCH_SIZE, self.PATCH_SIZE))
-            patch = np.array(region.convert("RGB"))
-            patch = cv2.cvtColor(patch, cv2.COLOR_RGB2BGR)
-        except Exception as e:
-            logger.warning(f"Failed to extract patch at ({x}, {y}): {e}")
-            return None
-        finally:
-            slide.close()
-
-        return patch
 
     def _build_prompt(self) -> str:
         """Build VLM prompt with optional few-shot exemplars.

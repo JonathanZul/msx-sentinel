@@ -8,6 +8,7 @@ from typing import Iterator
 
 import numpy as np
 import tifffile
+import zarr
 from PIL import Image
 from rich.progress import (
     BarColumn,
@@ -24,6 +25,9 @@ from src.core.paths import Paths
 
 logger = logging.getLogger(__name__)
 
+# Suppress PIL decompression bomb warning for large masks
+Image.MAX_IMAGE_PIXELS = None
+
 
 class TilingEngine:
     """Multi-scale tile extractor for OME-TIFF WSIs.
@@ -31,9 +35,11 @@ class TilingEngine:
     Extracts tiles at macro (1.25x), mid (10x), and high (40x) scales
     with 15% overlap. Filters tiles using a pre-computed tissue mask.
     All coordinates are stored normalized to Level 0 (40x).
+
+    Uses zarr-backed lazy loading to avoid loading entire pyramid levels
+    into memory, enabling processing of 100GB+ WSIs on limited RAM.
     """
 
-    MASK_SCALING_FACTOR: int = 8
     OVERLAP_FRACTION: float = 0.15
 
     def __init__(
@@ -91,22 +97,62 @@ class TilingEngine:
 
             logger.info(f"WSI dimensions (Level 0): {wsi_width} x {wsi_height}")
 
+            # Auto-detect mask scaling factor
+            mask_scale = self._compute_mask_scale(
+                wsi_dims=(wsi_width, wsi_height),
+                mask_dims=(mask_array.shape[1], mask_array.shape[0]),
+            )
+            logger.debug(f"Mask scaling factor: {mask_scale:.1f}x")
+
             # Build pyramid level map: level_index -> (page_index, downsample)
             pyramid_map = self._build_pyramid_map(tif, wsi_width, wsi_height)
 
+            # Create zarr store for memory-efficient region access
+            store = tif.aszarr()
+
             for scale_name in scales:
                 count = self._extract_scale(
+                    store=store,
                     tif=tif,
                     wsi_name=wsi_name,
                     scale_name=scale_name,
                     mask_array=mask_array,
+                    mask_scale=mask_scale,
                     wsi_dims=(wsi_width, wsi_height),
                     pyramid_map=pyramid_map,
                     tissue_threshold=tissue_threshold,
                 )
                 tile_counts[scale_name] = count
 
+            store.close()
+
         return tile_counts
+
+    def _compute_mask_scale(
+        self,
+        wsi_dims: tuple[int, int],
+        mask_dims: tuple[int, int],
+    ) -> float:
+        """Compute the scaling factor between WSI Level 0 and mask.
+
+        Args:
+            wsi_dims: (width, height) of WSI at Level 0.
+            mask_dims: (width, height) of mask image.
+
+        Returns:
+            Average scaling factor (WSI pixels per mask pixel).
+        """
+        scale_x = wsi_dims[0] / mask_dims[0]
+        scale_y = wsi_dims[1] / mask_dims[1]
+
+        # Warn if scales differ significantly (anisotropic mask)
+        if abs(scale_x - scale_y) / max(scale_x, scale_y) > 0.1:
+            logger.warning(
+                f"Anisotropic mask scaling: X={scale_x:.1f}, Y={scale_y:.1f}. "
+                "Using average."
+            )
+
+        return (scale_x + scale_y) / 2
 
     def _load_mask(self, mask_path: Path) -> np.ndarray:
         """Load tissue mask as single-channel array.
@@ -149,10 +195,12 @@ class TilingEngine:
 
     def _extract_scale(
         self,
+        store: zarr.storage.FSStore,
         tif: tifffile.TiffFile,
         wsi_name: str,
         scale_name: str,
         mask_array: np.ndarray,
+        mask_scale: float,
         wsi_dims: tuple[int, int],
         pyramid_map: dict[int, tuple[int, float]],
         tissue_threshold: float,
@@ -185,6 +233,9 @@ class TilingEngine:
         # Check for native pyramid level
         native_level = self._find_native_level(scale_config, pyramid_map)
 
+        # Open zarr array for the appropriate pyramid level
+        zarr_array = zarr.open(store, mode="r")
+
         tile_count = 0
 
         with self._progress_bar(f"[{scale_name}]") as progress:
@@ -194,11 +245,15 @@ class TilingEngine:
                 progress.update(task, advance=1)
 
                 # Skip if insufficient tissue
-                if not self._is_tissue(mask_array, x0, y0, tile_size_l0, tile_size_l0, tissue_threshold):
+                if not self._is_tissue(
+                    mask_array, x0, y0, tile_size_l0, tile_size_l0,
+                    mask_scale, tissue_threshold,
+                ):
                     continue
 
-                # Extract tile
-                tile = self._extract_tile(
+                # Extract tile using zarr (memory-efficient)
+                tile = self._extract_tile_zarr(
+                    zarr_array=zarr_array,
                     tif=tif,
                     x0=x0,
                     y0=y0,
@@ -263,8 +318,9 @@ class TilingEngine:
 
         return None
 
-    def _extract_tile(
+    def _extract_tile_zarr(
         self,
+        zarr_array: zarr.Array | zarr.Group,
         tif: tifffile.TiffFile,
         x0: int,
         y0: int,
@@ -273,10 +329,11 @@ class TilingEngine:
         native_level: int | None,
         pyramid_map: dict[int, tuple[int, float]],
     ) -> Image.Image | None:
-        """Extract a single tile, downsampling if necessary.
+        """Extract a single tile using zarr for memory-efficient access.
 
         Args:
-            tif: Open TiffFile handle.
+            zarr_array: Zarr array opened from tifffile store.
+            tif: Open TiffFile handle (for metadata).
             x0, y0: Top-left corner in Level 0 coordinates.
             tile_size: Output tile dimension in pixels.
             scale_config: Scale configuration.
@@ -287,32 +344,56 @@ class TilingEngine:
             PIL Image or None if extraction failed.
         """
         try:
+            # Determine if zarr_array is a Group (multi-level) or Array (single level)
+            is_group = hasattr(zarr_array, "keys") and callable(zarr_array.keys)
+
             if native_level is not None and scale_config.downsample > 1:
                 # Extract from native pyramid level
                 page_idx, actual_downsample = pyramid_map[native_level]
                 x_scaled = int(x0 / actual_downsample)
                 y_scaled = int(y0 / actual_downsample)
 
-                page = tif.pages[page_idx]
-                region = page.asarray()[
-                    y_scaled:y_scaled + tile_size,
-                    x_scaled:x_scaled + tile_size,
-                ]
+                # Zarr lazy slice - only loads requested region
+                if is_group:
+                    # Multi-level pyramid stored as group (zarr v3 uses string keys)
+                    level_array = zarr_array[str(page_idx)]
+                    region = np.array(level_array[
+                        y_scaled:y_scaled + tile_size,
+                        x_scaled:x_scaled + tile_size,
+                    ])
+                else:
+                    # Single array or different structure
+                    region = np.array(zarr_array[
+                        y_scaled:y_scaled + tile_size,
+                        x_scaled:x_scaled + tile_size,
+                    ])
             else:
                 # Extract from Level 0 and downsample
                 read_size = int(tile_size * scale_config.downsample)
-                page = tif.pages[0]
-                region = page.asarray()[
-                    y0:y0 + read_size,
-                    x0:x0 + read_size,
-                ]
+
+                # Zarr lazy slice from Level 0
+                if is_group:
+                    level0 = zarr_array["0"]
+                    region = np.array(level0[
+                        y0:y0 + read_size,
+                        x0:x0 + read_size,
+                    ])
+                else:
+                    region = np.array(zarr_array[
+                        y0:y0 + read_size,
+                        x0:x0 + read_size,
+                    ])
+
+            # Handle empty or invalid regions
+            if region.size == 0:
+                return None
 
             # Convert to PIL
             if region.ndim == 2:
                 img = Image.fromarray(region, mode="L")
-            elif region.shape[2] == 3:
+            elif region.ndim == 3 and region.shape[2] == 3:
                 img = Image.fromarray(region, mode="RGB")
-            elif region.shape[2] == 4:
+            elif region.ndim == 3 and region.shape[2] == 4:
                 img = Image.fromarray(region, mode="RGBA")
             else:
                 img = Image.fromarray(region)
@@ -334,24 +415,26 @@ class TilingEngine:
         y0: int,
         w0: int,
         h0: int,
+        mask_scale: float,
         threshold: float,
     ) -> bool:
         """Check if tile region contains sufficient tissue.
 
         Args:
-            mask_array: Single-channel mask at 1/8 resolution.
+            mask_array: Single-channel mask at reduced resolution.
             x0, y0: Top-left corner in Level 0 coordinates.
             w0, h0: Tile dimensions in Level 0 pixels.
+            mask_scale: WSI-to-mask scaling factor (auto-detected).
             threshold: Minimum tissue fraction.
 
         Returns:
             True if tissue coverage >= threshold.
         """
-        # Map Level 0 coords to mask coords
-        x_m = x0 // self.MASK_SCALING_FACTOR
-        y_m = y0 // self.MASK_SCALING_FACTOR
-        w_m = max(1, w0 // self.MASK_SCALING_FACTOR)
-        h_m = max(1, h0 // self.MASK_SCALING_FACTOR)
+        # Map Level 0 coords to mask coords using dynamic scale
+        x_m = int(x0 / mask_scale)
+        y_m = int(y0 / mask_scale)
+        w_m = max(1, int(w0 / mask_scale))
+        h_m = max(1, int(h0 / mask_scale))
 
         # Clamp to mask bounds
         mask_h, mask_w = mask_array.shape[:2]
