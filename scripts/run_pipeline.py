@@ -117,6 +117,11 @@ def parse_args() -> argparse.Namespace:
         help="Skip VLM verification phase",
     )
     parser.add_argument(
+        "--force-vlm",
+        action="store_true",
+        help="Re-verify all candidates, ignoring existing VLM results",
+    )
+    parser.add_argument(
         "--vlm-min-confidence",
         type=float,
         default=0.0,
@@ -391,6 +396,7 @@ def main() -> int:
             wsi_name,
             min_confidence=args.vlm_min_confidence,
             max_concurrent=args.vlm_concurrency,
+            force=args.force_vlm,
         )
 
         results["vlm"] = vlm_summary

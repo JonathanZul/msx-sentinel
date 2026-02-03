@@ -113,6 +113,7 @@ class VLMEye:
         self,
         wsi_name: str,
         min_confidence: float = 0.0,
+        force: bool = False,
     ) -> list[Candidate]:
         """Query manifest for YOLO detections pending VLM verification.
 
@@ -120,16 +121,20 @@ class VLMEye:
             wsi_name: WSI filename to query.
             min_confidence: Minimum YOLO confidence threshold (0.0-1.0).
                            Detections below this threshold are skipped.
+            force: If True, include already-verified candidates for re-verification.
 
         Returns:
-            List of Candidate objects where yolo_box is set but vlm_description is NULL.
+            List of Candidate objects where yolo_box is set but vlm_description is NULL
+            (or all candidates if force=True).
         """
         tiles = self._manifest.get_tiles_by_wsi(wsi_name)
         candidates: list[Candidate] = []
         skipped_low_conf = 0
 
         for tile in tiles:
-            if tile.yolo_box is None or tile.vlm_description is not None:
+            if tile.yolo_box is None:
+                continue
+            if not force and tile.vlm_description is not None:
                 continue
 
             detections = tile.yolo_box.get("detections", [])
@@ -151,8 +156,9 @@ class VLMEye:
                     organ_type=tile.organ_type,
                 ))
 
+        force_label = " (force=True, re-verifying all)" if force else ""
         logger.info(
-            f"Found {len(candidates)} unverified candidates for {wsi_name} "
+            f"Found {len(candidates)} candidates for {wsi_name}{force_label} "
             f"(skipped {skipped_low_conf} below {min_confidence:.2f} confidence)"
         )
         return candidates
@@ -162,6 +168,7 @@ class VLMEye:
         wsi_name: str,
         min_confidence: float = 0.0,
         max_concurrent: int = 1,
+        force: bool = False,
     ) -> dict[str, Any]:
         """Run VLM verification on all unverified candidates for a WSI.
 
@@ -169,11 +176,12 @@ class VLMEye:
             wsi_name: WSI filename to process.
             min_confidence: Minimum YOLO confidence to verify (0.0-1.0).
             max_concurrent: Maximum concurrent VLM requests (1=sequential).
+            force: If True, re-verify all candidates regardless of existing results.
 
         Returns:
             Summary dict with candidate_count, verified_count, and positive_count.
         """
-        candidates = self.get_unverified_candidates(wsi_name, min_confidence)
+        candidates = self.get_unverified_candidates(wsi_name, min_confidence, force)
         if not candidates:
             logger.info(f"No unverified candidates for {wsi_name}")
             return {"candidate_count": 0, "verified_count": 0, "positive_count": 0}
