@@ -117,6 +117,18 @@ def parse_args() -> argparse.Namespace:
         help="Skip VLM verification phase",
     )
     parser.add_argument(
+        "--vlm-min-confidence",
+        type=float,
+        default=0.0,
+        help="Minimum YOLO confidence for VLM verification (0.0-1.0, default: 0.0)",
+    )
+    parser.add_argument(
+        "--vlm-concurrency",
+        type=int,
+        default=1,
+        help="Max concurrent VLM requests (default: 1, recommend 4-8 for speedup)",
+    )
+    parser.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="Enable debug logging",
@@ -375,7 +387,11 @@ def main() -> int:
         print_phase_header(4, "VLM Eye", "Morphological verification of candidates")
 
         eye = VLMEye(manifest=manifest)
-        vlm_summary = eye.verify_candidates(wsi_name)
+        vlm_summary = eye.verify_candidates(
+            wsi_name,
+            min_confidence=args.vlm_min_confidence,
+            max_concurrent=args.vlm_concurrency,
+        )
 
         results["vlm"] = vlm_summary
         if vlm_summary["verified_count"] > 0:

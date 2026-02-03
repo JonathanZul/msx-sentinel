@@ -33,6 +33,19 @@ class VLMProvider(ABC):
         """
         ...
 
+    @abstractmethod
+    async def analyze_patch_async(self, image_path: Path, prompt: str) -> str:
+        """Async version of analyze_patch for concurrent processing.
+
+        Args:
+            image_path: Path to the PNG patch.
+            prompt: Analysis prompt for the model.
+
+        Returns:
+            Model's textual description of the patch.
+        """
+        ...
+
 
 class LLMProvider(ABC):
     """Abstract base class for large language model providers."""
@@ -113,6 +126,62 @@ class OllamaVLM(VLMProvider):
             return ""
 
         logger.debug(f"OllamaVLM response: {content[:100]}...")
+        return content
+
+    async def analyze_patch_async(self, image_path: Path, prompt: str) -> str:
+        """Async version of analyze_patch for concurrent processing.
+
+        Args:
+            image_path: Path to the PNG patch.
+            prompt: Analysis prompt for the model.
+
+        Returns:
+            Model's textual response.
+
+        Raises:
+            RuntimeError: If Ollama server is unreachable or returns error.
+        """
+        # Encode image as base64
+        with open(image_path, "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+        payload = {
+            "model": self._model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                    "images": [image_b64],
+                }
+            ],
+            "stream": False,
+            "options": {
+                "temperature": self._params.temperature,
+                "top_p": self._params.top_p,
+                "num_predict": self._params.max_tokens,
+            },
+        }
+
+        url = f"{self._host}/api/chat"
+        logger.debug(f"OllamaVLM async request to {url} with model {self._model}")
+
+        try:
+            async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+        except httpx.ConnectError:
+            raise RuntimeError(f"Ollama server not reachable at {self._host}")
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(f"Ollama API error: {e.response.status_code} - {e.response.text}")
+
+        data = response.json()
+        content = data.get("message", {}).get("content", "")
+
+        if not content:
+            logger.warning(f"Empty response from Ollama VLM: {data}")
+            return ""
+
+        logger.debug(f"OllamaVLM async response: {content[:100]}...")
         return content
 
 

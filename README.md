@@ -10,7 +10,7 @@ MSX-Sentinel employs a multi-scale cascade architecture (1.25x → 10x → 40x) 
 
 ```bash
 # Setup
-git clone <repo-url>
+git clone https://github.com/JonathanZul/msx-sentinel.git
 cd msx-sentinel
 python -m venv .venv
 source .venv/bin/activate
@@ -42,6 +42,8 @@ python scripts/run_pipeline.py <wsi_path> <mask_path> [options]
 | `--skip-detection` | Skip YOLO inference |
 | `--skip-biomarkers` | Skip hemocyte analysis |
 | `--skip-vlm` | Skip VLM verification |
+| `--vlm-min-confidence` | Min YOLO confidence for VLM (0.0-1.0, default: 0.0) |
+| `--vlm-concurrency` | Max concurrent VLM requests (default: 1, recommend 4-8) |
 | `-v, --verbose` | Enable debug logging |
 
 ### Examples
@@ -58,6 +60,9 @@ python scripts/run_pipeline.py --mode local --package data/bridge_packages/slide
 
 # Resume from existing tiles
 python scripts/run_pipeline.py slide.ome.tiff mask.png --skip-tiling
+
+# Fast VLM with concurrent requests and confidence filtering (5-10x speedup)
+python scripts/run_pipeline.py slide.ome.tiff mask.png --vlm-concurrency 8 --vlm-min-confidence 0.5
 
 # Only run diagnosis on processed data
 python scripts/run_pipeline.py slide.ome.tiff mask.png \

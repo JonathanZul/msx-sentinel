@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -108,17 +109,24 @@ class VLMEye:
         self._positive_exemplar = self._reference_dir / "positive_exemplar.png"
         self._negative_exemplar = self._reference_dir / "negative_exemplar.png"
 
-    def get_unverified_candidates(self, wsi_name: str) -> list[Candidate]:
+    def get_unverified_candidates(
+        self,
+        wsi_name: str,
+        min_confidence: float = 0.0,
+    ) -> list[Candidate]:
         """Query manifest for YOLO detections pending VLM verification.
 
         Args:
             wsi_name: WSI filename to query.
+            min_confidence: Minimum YOLO confidence threshold (0.0-1.0).
+                           Detections below this threshold are skipped.
 
         Returns:
             List of Candidate objects where yolo_box is set but vlm_description is NULL.
         """
         tiles = self._manifest.get_tiles_by_wsi(wsi_name)
         candidates: list[Candidate] = []
+        skipped_low_conf = 0
 
         for tile in tiles:
             if tile.yolo_box is None or tile.vlm_description is not None:
@@ -126,6 +134,11 @@ class VLMEye:
 
             detections = tile.yolo_box.get("detections", [])
             for det in detections:
+                conf = det.get("confidence", 0.0)
+                if conf < min_confidence:
+                    skipped_low_conf += 1
+                    continue
+
                 bbox = det.get("bbox_level0", {})
                 candidates.append(Candidate(
                     tile_id=tile.id,
@@ -134,23 +147,33 @@ class VLMEye:
                     y_level0=bbox.get("y", 0),
                     w_level0=bbox.get("w", 0),
                     h_level0=bbox.get("h", 0),
-                    confidence=det.get("confidence", 0.0),
+                    confidence=conf,
                     organ_type=tile.organ_type,
                 ))
 
-        logger.info(f"Found {len(candidates)} unverified candidates for {wsi_name}")
+        logger.info(
+            f"Found {len(candidates)} unverified candidates for {wsi_name} "
+            f"(skipped {skipped_low_conf} below {min_confidence:.2f} confidence)"
+        )
         return candidates
 
-    def verify_candidates(self, wsi_name: str) -> dict[str, Any]:
+    def verify_candidates(
+        self,
+        wsi_name: str,
+        min_confidence: float = 0.0,
+        max_concurrent: int = 1,
+    ) -> dict[str, Any]:
         """Run VLM verification on all unverified candidates for a WSI.
 
         Args:
             wsi_name: WSI filename to process.
+            min_confidence: Minimum YOLO confidence to verify (0.0-1.0).
+            max_concurrent: Maximum concurrent VLM requests (1=sequential).
 
         Returns:
             Summary dict with candidate_count, verified_count, and positive_count.
         """
-        candidates = self.get_unverified_candidates(wsi_name)
+        candidates = self.get_unverified_candidates(wsi_name, min_confidence)
         if not candidates:
             logger.info(f"No unverified candidates for {wsi_name}")
             return {"candidate_count": 0, "verified_count": 0, "positive_count": 0}
@@ -167,6 +190,15 @@ class VLMEye:
             debug_dir = self._paths.debug_dir / "vlm" / wsi_name
             debug_dir.mkdir(parents=True, exist_ok=True)
 
+        # Use concurrent processing if max_concurrent > 1
+        if max_concurrent > 1:
+            return asyncio.run(
+                self._verify_candidates_concurrent(
+                    candidates, wsi_path, debug_dir, max_concurrent
+                )
+            )
+
+        # Sequential processing (original behavior)
         verified = 0
         positives = 0
 
@@ -189,6 +221,113 @@ class VLMEye:
 
         return {
             "wsi_name": wsi_name,
+            "candidate_count": len(candidates),
+            "verified_count": verified,
+            "positive_count": positives,
+        }
+
+    async def _verify_candidates_concurrent(
+        self,
+        candidates: list[Candidate],
+        wsi_path: Path,
+        debug_dir: Path | None,
+        max_concurrent: int,
+    ) -> dict[str, Any]:
+        """Process candidates concurrently with semaphore-limited parallelism.
+
+        Args:
+            candidates: List of candidates to verify.
+            wsi_path: Path to source WSI.
+            debug_dir: Debug output directory, or None.
+            max_concurrent: Maximum concurrent VLM requests.
+
+        Returns:
+            Summary dict with verification results.
+        """
+        semaphore = asyncio.Semaphore(max_concurrent)
+        verified = 0
+        positives = 0
+        results: list[dict[str, Any] | None] = []
+
+        # Pre-extract all patches (I/O bound, done sequentially to avoid WSI contention)
+        logger.info(f"Pre-extracting {len(candidates)} patches...")
+        patch_data: list[tuple[Candidate, np.ndarray | None, Path | None]] = []
+
+        for i, candidate in enumerate(candidates):
+            patch = self._extract_patch(candidate, wsi_path)
+            if patch is not None:
+                # Save to unique temp file
+                patch_path = self._paths.debug_dir / "vlm" / f"_temp_patch_{i}.png"
+                patch_path.parent.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(str(patch_path), patch)
+                patch_data.append((candidate, patch, patch_path))
+            else:
+                patch_data.append((candidate, None, None))
+
+        logger.info(f"Launching {max_concurrent} concurrent VLM workers...")
+
+        async def verify_one(
+            candidate: Candidate,
+            patch: np.ndarray | None,
+            patch_path: Path | None,
+        ) -> dict[str, Any] | None:
+            """Verify a single candidate with semaphore control."""
+            if patch is None or patch_path is None:
+                return None
+
+            async with semaphore:
+                prompt = self._build_prompt()
+                try:
+                    response = await self._vlm.analyze_patch_async(patch_path, prompt)
+                    result = self._parse_vlm_response(response)
+                except Exception as e:
+                    logger.warning(f"VLM call failed for candidate {candidate.tile_id}: {e}")
+                    result = DEFAULT_VLM_RESPONSE.copy()
+
+                # Persist to manifest (thread-safe for SQLite)
+                result_json = json.dumps(result)
+                self._manifest.update_diagnostic(candidate.tile_id, vlm_description=result_json)
+
+                # Save debug artifacts
+                if debug_dir:
+                    self._save_debug_artifacts(candidate, patch, result, debug_dir)
+
+                return result
+
+        # Launch all tasks
+        tasks = [
+            verify_one(candidate, patch, patch_path)
+            for candidate, patch, patch_path in patch_data
+        ]
+
+        # Process with progress bar
+        with self._progress_bar() as progress:
+            task_id = progress.add_task("VLM Verify (concurrent)", total=len(tasks))
+
+            for coro in asyncio.as_completed(tasks):
+                result = await coro
+                progress.update(task_id, advance=1)
+                results.append(result)
+
+        # Clean up temp files
+        for _, _, patch_path in patch_data:
+            if patch_path and patch_path.exists():
+                patch_path.unlink()
+
+        # Tally results
+        for result in results:
+            if result is not None:
+                verified += 1
+                if result.get("organism_present", False):
+                    positives += 1
+
+        logger.info(
+            f"VLM verification complete: {verified}/{len(candidates)} verified, "
+            f"{positives} positives"
+        )
+
+        return {
+            "wsi_name": candidates[0].wsi_name if candidates else "",
             "candidate_count": len(candidates),
             "verified_count": verified,
             "positive_count": positives,
